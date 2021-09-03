@@ -57,6 +57,27 @@ Which captures and retries any error returned by the Started task, and performs 
 
 https://docs.aws.amazon.com/general/latest/gr/api-retries.html
 
+If the task is started successfuly or fails to start, the State Machine will notify all the subscribers of the specified SNS Topic:
+
+```
+      "Notify Success": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::sns:publish",
+        "Parameters": {
+          "Message": "AWS Fargate Task started by Step Functions succeeded",
+          "TopicArn": "REPLACE_ME_WITH_SNS_TOPIC_ARN"
+        },
+        "End": true
+      },
+      "Notify Failure": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::sns:publish",
+        "Parameters": {
+          "Message": "AWS Fargate Task started by Step Functions failed",
+          "TopicArn": "REPLACE_ME_WITH_SNS_TOPIC_ARN"
+        }
+```
+
 
 #### Deploy the solution with AWS CloudFormation
 
