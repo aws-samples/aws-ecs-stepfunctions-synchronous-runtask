@@ -1,0 +1,377 @@
+Resources:
+
+### Networking Resources Setup
+  SampleVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      InstanceTenancy: default
+      Tags:
+      - Key: aws-sample
+        Value: cwe-sync-tasks 
+
+# Public Subnet Setup
+  SamplePublicSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: SampleVPC
+    Properties:
+      VpcId:
+        Ref: SampleVPC
+      CidrBlock: 172.31.1.0/24
+      Tags:
+      - Key: aws-sample
+        Value: cwe-sync-tasks
+
+# Internet Gateway Setup
+  SampleInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: 
+      - SampleVPC
+      - SamplePublicSubnet
+    Properties:
+      Tags:
+        - Key: aws-sample
+          Value: cwe-sync-tasks
+
+  SampleGatewayAttachement:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DependsOn: SampleInternetGateway
+    Properties:
+      VpcId: 
+        Ref: SampleVPC
+      InternetGatewayId: 
+        Ref: SampleInternetGateway
+
+# Routes and Table for IGW
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: SampleVPC
+    Properties:
+      VpcId: 
+        Ref: SampleVPC
+      Tags:
+        - Key: aws-sample
+          Value: cwe-sync-tasks    
+
+  PublicRoute:
+    DependsOn: SampleGatewayAttachement
+    Type: AWS::EC2::Route
+    Properties:
+        RouteTableId:
+          Ref: PublicRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        GatewayId:
+          Ref: SampleInternetGateway   
+
+  PublicRouteSubnetAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SamplePublicSubnet
+    Properties:
+      SubnetId:
+        Ref: SamplePublicSubnet
+      RouteTableId: 
+        Ref: PublicRouteTable
+
+# Private Subnet Setup
+  SamplePrivateSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: SampleVPC
+    Properties:
+      VpcId:
+        Ref: SampleVPC
+      CidrBlock: 172.31.2.0/24
+      Tags:
+        - Key: aws-sample
+          Value: cwe-sync-tasks
+  
+# NAT Gateway Setup for Private Subnet
+  NatEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: SampleVPC
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: aws-sample
+          Value: cwe-sync-tasks
+
+  SampleNATgw:
+   Type: AWS::EC2::NatGateway
+   DependsOn: 
+    - SamplePublicSubnet
+    - NatEIP
+   Properties:
+      AllocationId:
+         Fn::GetAtt:
+         - NatEIP
+         - AllocationId
+      SubnetId:
+         Ref: SamplePublicSubnet
+      Tags:
+         - Key: aws-sample
+           Value: cwe-sync-tasks
+
+# Private route table setup
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: SampleVPC
+    Properties:
+      VpcId: 
+        Ref: SampleVPC
+      Tags:
+        - Key: aws-sample
+          Value: cwe-sync-tasks  
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: PrivateRouteTable
+    Properties:
+        RouteTableId:
+          Ref: PrivateRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        NatGatewayId:
+          Ref: SampleNATgw
+
+  SamplePrivateRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SamplePrivateSubnet
+    Properties:
+      SubnetId: 
+        Ref: SamplePrivateSubnet
+      RouteTableId:  
+        Ref: PrivateRouteTable
+
+### ECS Setup
+
+# Cluser Setup
+  ECSSampleCluster:
+    Type: AWS::ECS::Cluster
+    DependsOn: SamplePrivateRouteAssoc
+    Properties:
+      ClusterName: CloudWatchEventCluster
+      CapacityProviders:
+        - FARGATE_SPOT
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      Tags:
+        - Key: aws-sample
+          Value: cwe-sync-tasks
+
+# Task Definition Setup
+
+# Log Group for Task Definition
+  LogGroup:
+    DependsOn: ECSSampleCluster
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: "aws-samples-sync-runtask"
+
+# Execution Role for Task
+  ExecutionRoleForTasks:
+    Type: AWS::IAM::Role
+    DependsOn: LogGroup
+    Properties:
+      RoleName: "FargateExecutionSampleRole"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+# Task Definition
+  SampleTaskDefinition:
+      Type: AWS::ECS::TaskDefinition
+      DependsOn: ExecutionRoleForTasks
+      Properties: 
+        RequiresCompatibilities: 
+         - "FARGATE"
+        NetworkMode: awsvpc
+        ExecutionRoleArn: !Ref ExecutionRoleForTasks
+        Cpu: 256
+        Memory: 512
+        ContainerDefinitions:
+          - Name: "goapp"
+            Image: "public.ecr.aws/u2o5g0m9/stepfunc-sample-goapp:latest"
+            LogConfiguration:
+              LogDriver: "awslogs"
+              Options:
+                 "awslogs-group": !Ref LogGroup
+                 "awslogs-region": !Ref "AWS::Region"
+                 "awslogs-stream-prefix": "aws-samples-sync-runtask"
+  
+## SNS Topic Setup
+  SampleSnsTopic:
+      Type: AWS::SNS::Topic
+      DependsOn: SampleTaskDefinition
+      Properties:
+        TopicName: "aws-samples-sync-runtask-topic"
+
+## IAM Policy for StepFunctions Role
+
+  StepFunctionsSampleRole:
+    Type: AWS::IAM::Role
+    DependsOn: SampleSnsTopic
+    Properties:
+      RoleName: StepFunctionsSampleRole
+      AssumeRolePolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: states.amazonaws.com
+              Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: "SNSPublishAccessPolicy-for-ecs-sample"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+                - 
+                  Effect: "Allow"
+                  Action: "sns:Publish"
+                  Resource: !Ref SampleSnsTopic
+        - PolicyName: "ECSSamplePolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "ecs:RunTask"
+                Resource: !Ref SampleTaskDefinition
+
+              - Effect: "Allow"
+                Action: "iam:PassRole"
+                Resource: "*"
+                Condition:
+                    StringLike:
+                      iam:PassedToService: "ecs-tasks.amazonaws.com"
+
+              - Effect: "Allow"
+                Action:
+                  - "ecs:StopTask"
+                  - "ecs:DescribeTasks"
+                Resource: "*"
+              
+              - Effect: "Allow"
+                Action:
+                  - "events:PutTargets"
+                  - "events:PutRule"
+                  - "events:DescribeRule"
+                Resource: "*"
+
+
+
+## Step Function setup
+  SyncRunTaskMachine:
+      Type: AWS::StepFunctions::StateMachine
+      DependsOn: SampleSnsTopic
+      Properties:
+        StateMachineName: "AWS-Sample-Sync-RunTask-Machine"
+        DefinitionString: 
+          Fn::Sub:
+            |-
+            {
+                    "Comment": "Synchronous RunTask Operation",
+                    "StartAt": "Run Fargate Task",
+                    "TimeoutSeconds": 3600,
+                    "States": {
+                      "Run Fargate Task": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::ecs:runTask.sync",
+                        "Parameters": {
+                          "LaunchType": "FARGATE",
+                          "Cluster": "${ECSSampleCluster.Arn}",
+                          "TaskDefinition": "${SampleTaskDefinition}",
+                          "NetworkConfiguration": {
+                            "AwsvpcConfiguration": {
+                              "Subnets": [
+                                "${SamplePrivateSubnet}"
+                              ],
+                              "AssignPublicIp": "ENABLED"
+                            }
+                          }
+                        },
+                        "Retry": [
+                          {
+                            "ErrorEquals": [
+                              "States.ALL"
+                            ],
+                            "IntervalSeconds": 10,
+                            "MaxAttempts": 3,
+                            "BackoffRate": 2
+                          }
+                        ],
+                        "Next": "Notify Success",
+                        "Catch": [
+                          {
+                            "ErrorEquals": [
+                              "States.ALL"
+                            ],
+                            "Next": "Notify Failure"
+                          }
+                        ]
+                      },
+                      "Notify Success": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::sns:publish",
+                        "Parameters": {
+                          "Message": "AWS Fargate Task started by Step Functions succeeded",
+                          "TopicArn": "${SampleSnsTopic}"
+                        },
+                        "End": true
+                      },
+                      "Notify Failure": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::sns:publish",
+                        "Parameters": {
+                          "Message": "AWS Fargate Task started by Step Functions failed",
+                          "TopicArn": "${SampleSnsTopic}"
+                        },
+                        "End": true
+                      }
+                    }
+                  }
+        RoleArn: !GetAtt StepFunctionsSampleRole.Arn
+        Tags:
+          - Key: "aws-sample"
+            Value: "cwe-sync-tasks"
+
+### CloudWatch Event Setup
+
+  IAMRoleForCWEvents:
+    Type: AWS::IAM::Role
+    DependsOn: SyncRunTaskMachine
+    Properties:
+      RoleName: CWEventsSampleRoleForStepFunctions
+      AssumeRolePolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: events.amazonaws.com
+              Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: "SNSPublishAccessPolicy-for-ecs-sample"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+                - 
+                  Effect: "Allow"
+                  Action: "states:StartExecution"
+                  Resource: !GetAtt SyncRunTaskMachine.Arn
+
+  scheduledRule:
+    Type: AWS::Events::Rule
+    DependsOn: IAMRoleForCWEvents
+    Properties:
+      Description: "Synchronous RunTask"
+      ScheduleExpression: "rate(10 minutes)"
+      State:  "ENABLED"
+      Targets:
+      - 
+        Arn: !GetAtt SyncRunTaskMachine.Arn
+        Id: "SynchronousScheduledRunTask"
+        RoleArn: !GetAtt IAMRoleForCWEvents.Arn
+  

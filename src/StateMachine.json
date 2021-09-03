@@ -1,0 +1,61 @@
+{
+    "Comment": "Synchronous RunTask Operation",
+    "StartAt": "Run Fargate Task",
+    "TimeoutSeconds": 3600,
+    "States": {
+      "Run Fargate Task": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::ecs:runTask.sync",
+        "Parameters": {
+          "LaunchType": "FARGATE",
+          "Cluster": "<REPLACE_ME_WITH_ECS_CLUSTER_ARN",
+          "TaskDefinition": "REPLACE_ME_WITH_ECS_TASK_DEFINITION",
+          "NetworkConfiguration": {
+            "AwsvpcConfiguration": {
+              "Subnets": [
+                "${SamplePrivateSubnet}"
+              ],
+              "AssignPublicIp": "ENABLED"
+            }
+          }
+        },
+        "Retry": [
+          {
+            "ErrorEquals": [
+              "States.ALL"
+            ],
+            "IntervalSeconds": 10,
+            "MaxAttempts": 3,
+            "BackoffRate": 2
+          }
+        ],
+        "Next": "Notify Success",
+        "Catch": [
+          {
+            "ErrorEquals": [
+              "States.ALL"
+            ],
+            "Next": "Notify Failure"
+          }
+        ]
+      },
+      "Notify Success": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::sns:publish",
+        "Parameters": {
+          "Message": "AWS Fargate Task started by Step Functions succeeded",
+          "TopicArn": "REPLACE_ME_WITH_SNS_TOPIC_ARN"
+        },
+        "End": true
+      },
+      "Notify Failure": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::sns:publish",
+        "Parameters": {
+          "Message": "AWS Fargate Task started by Step Functions failed",
+          "TopicArn": "REPLACE_ME_WITH_SNS_TOPIC_ARN"
+        },
+        "End": true
+      }
+    }
+  }
