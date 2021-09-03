@@ -1,4 +1,4 @@
-# Running Sunchronous RunTask API calls via AWS Step Functions
+# Running Synchronous RunTask API calls via AWS Step Functions
 
 ## Context
 
